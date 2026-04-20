@@ -1,0 +1,85 @@
+name: Release
+on:
+  push:
+    tags:
+      - v*
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-matrix:
+    name: Find modules
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: set-matrix
+        run: |
+          modules="$(find . -mindepth 0 -maxdepth 4 -type f -name '*.tf' | sed -r 's|/[^/]+$||' | sort | uniq | jq -c --slurp --raw-input 'split("\n") | map(select(. != ""))')"
+          echo "modules=$modules" >> $GITHUB_OUTPUT
+
+    outputs:
+      modules: ${{ steps.set-matrix.outputs.modules }}
+
+  validate-docs-updated:
+    name: Validate docs updated
+    runs-on: ubuntu-latest
+
+    needs: [build-matrix]
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: true
+      matrix:
+        module: ${{ fromJson(needs.build-matrix.outputs.modules) }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Update module docs
+        uses: terraform-docs/gh-actions@6de6da0cefcc6b4b7a5cbea4d79d97060733093c # v1.4.1
+        with:
+          working-dir: ${{ matrix.module }}
+          output-file: README.md
+          output-method: inject
+          git-push: "false"
+
+      - name: Check documentation updated
+        run: git diff --cached --quiet >/dev/null 2>&1
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+
+    needs: [validate-docs-updated]
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # if we release often, there will be no more than this amount of commits in a release
+          fetch-depth: 50
+
+      - name: Setup Node
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: "24"
+
+      - uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b # v1.20.0
+        id: release
+        with:
+          draft: ${{ contains(github.ref, '-draft') }}
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-alpha') || contains(github.ref, '-beta') }}
+          generateReleaseNotes: true
+          allowUpdates: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Workflow notices
+        run: echo "::notice title=Release::${{ steps.release.outputs.html_url }}"

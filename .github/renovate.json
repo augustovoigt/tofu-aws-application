@@ -1,0 +1,31 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "gitAuthor": "Renovate Bot <bot@renovateapp.com>",
+  "extends": ["config:recommended"],
+  "baseBranches": ["main"],
+  "dependencyDashboard": false,
+  "prHourlyLimit": 10,
+  "forkProcessing": "disabled",
+  "labels": ["dependencies"],
+  "terraform": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "Group Terraform providers",
+      "groupName": "terraform-providers",
+      "matchPackageNames": ["hashicorp/{/,}**"]
+    },
+    {
+      "description": "Group GitHub Actions",
+      "groupName": "github-actions",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    },
+    {
+      "description": "Group Terraform Registry modules",
+      "groupName": "terraform-registry-modules",
+      "matchPackagePatterns": ["^terraform-aws-modules/"]
+    }
+  ]
+}

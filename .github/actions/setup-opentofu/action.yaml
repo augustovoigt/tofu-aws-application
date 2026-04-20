@@ -1,0 +1,37 @@
+name: 'Setup OpenTofu'
+description: 'Setup OpenTofu for the projects in this repository'
+author: 'Platform engineering team'
+# Ref: https://haya14busa.github.io/github-action-brandings/
+branding:
+  icon: 'box'
+  color: 'blue'
+inputs:
+  github_token:
+    description: 'Github access token to access OpenTofu modules'
+    default: '${{ github.token }}'
+runs:
+  using: composite
+  steps:
+    - name: Setup OpenTofu
+      uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f # v1.0.8
+      with:
+        tofu_version_file: .opentofu-version
+        tofu_wrapper: false
+
+    - name: Config OpenTofu plugin cache
+      shell: bash
+      run: |
+        echo 'plugin_cache_dir="${{ github.workspace }}/.terraform.d/plugin-cache"' > ~/.tofurc
+        mkdir -p ${{ github.workspace }}/.terraform.d/plugin-cache
+
+    - name: Cache OpenTofu
+      uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+      with:
+        path: ${{ github.workspace }}/.terraform.d/plugin-cache
+        key: ${{ runner.os }}-terraform-${{ hashFiles('environments/**/.terraform.lock.hcl') }}
+        restore-keys: ${{ runner.os }}-terraform-
+
+    - name: Authenticate OpenTofu
+      shell: bash
+      run: |
+        git config --global url."https://x-access-token:${{ inputs.github_token }}@github.com/".insteadOf "https://github.com/"

@@ -1,0 +1,243 @@
+name: 🏗️ Tofu Checks
+
+on:
+  pull_request:
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: write
+
+jobs:
+  tofu-fmt:
+    name: 🛠️ Auto Format Tofu Files
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🛎️ Checkout PR Branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ github.token }}
+
+      - name: 🛡️ Get GitHub App Token
+        id: get_token
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2
+        with:
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          app-id: ${{ secrets.GH_APP_ID }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Setup OpenTofu
+        uses: ./.github/actions/setup-opentofu
+        with:
+          github_token: ${{ steps.get_token.outputs.token }}
+
+      - name: 📁 Get changed Tofu files
+        id: changed-files
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47
+        with:
+          files: |
+            **.tf
+
+      - name: 🎨 Check if files need formatting
+        id: fmt
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          ALL_CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+        shell: bash
+        run: |
+          formatted_files=""
+
+          for file in ${ALL_CHANGED_FILES}; do
+            if ! tofu fmt -check "$file" >/dev/null 2>&1; then
+              tofu fmt "$file"
+              formatted_files+="- $file\n"
+            fi
+          done
+
+          if [ -n "$formatted_files" ]; then
+            echo "formatted=true" >> $GITHUB_OUTPUT
+            echo "files<<EOF" >> $GITHUB_OUTPUT
+            echo -e "$formatted_files" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "formatted=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 🚀 Commit and Push Formatting Changes
+        if: steps.fmt.outputs.formatted == 'true'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "chore(tofu): Auto-format Tofu files"
+          git push origin ${{ github.head_ref }}
+
+      - name: 🔍 Get Latest Commit SHA
+        if: steps.fmt.outputs.formatted == 'true'
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+
+      - name: 📝 Update PR Comment with Tofu Formatting Applied
+        if: steps.fmt.outputs.formatted == 'true'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          FORMATTED_FILES: ${{ steps.fmt.outputs.files }}
+          COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const formattedFiles = process.env.FORMATTED_FILES?.trim() || '';
+            const commitSha = process.env.COMMIT_SHA;
+            const commitUrl = commitSha
+              ? `https://github.com/${owner}/${repo}/commit/${commitSha}`
+              : '';
+
+            const commitMessage = commitSha
+              ? `\n\nThese changes have already been committed. You can view the commit [here](${commitUrl}).`
+              : '';
+
+            const output = `
+            ## Tofu Formatting Applied
+
+            \`\`\`
+            ${formattedFiles}
+            \`\`\`
+            ${commitMessage}
+            `;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+            });
+
+            const existingComment = comments.find(comment =>
+              comment.body.includes('## Tofu Formatting Applied')
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existingComment.id,
+                body: output,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: output,
+              });
+            }
+
+  tofu-lint:
+    name: 🔍 Lint Tofu Files
+    runs-on: ubuntu-latest
+    needs: tofu-fmt
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ github.token }}
+
+      - name: 🛠️ Setup TFLint
+        uses: terraform-linters/setup-tflint@4cb9feea73331a35b422df102992a03a44a3bb33 # v6
+        with:
+          tflint_version: latest
+
+      - name: ℹ️ Show TFLint version
+        run: tflint --version
+
+      - name: 🏗️ Init TFLint
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: 📁 Get changed Tofu files
+        id: changed-files
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62 # v47
+        with:
+          files: |
+            **.tf
+
+      - name: 🔍 Run TFLint on changed directories
+        id: tflint
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          ALL_CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+        shell: bash
+        run: |
+          repo_root=$(git rev-parse --show-toplevel)
+          unique_directories=$(echo "${ALL_CHANGED_FILES}" | xargs -n 1 dirname | sort -u)
+
+          tflint_output=""
+
+          for dir in ${unique_directories}; do
+            echo "Linting directory $dir with TFLint"
+            lint_result=$(tflint --chdir "$dir" --config "$repo_root/.tflint.hcl" --format compact || true)
+            if [ -n "$lint_result" ]; then
+              tflint_output+="\n$lint_result\n"
+            fi
+          done
+
+          echo "results<<EOF" >> $GITHUB_OUTPUT
+          echo -e "${tflint_output:-No findings found by TFLint.}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: 📋 Update PR Comment with Lint Results
+        if: steps.changed-files.outputs.any_changed == 'true'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          TFLINT_RESULT: ${{ steps.tflint.outputs.results }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const lintResults = process.env.TFLINT_RESULT?.trim() || 'No findings found by TFLint.';
+
+            const output = `
+            ## Tofu Linting Results
+
+            \`\`\`
+            ${lintResults}
+            \`\`\`
+            `;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+            });
+
+            const existingComment = comments.find(comment =>
+              comment.body.includes('## Tofu Linting Results')
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existingComment.id,
+                body: output,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: output,
+              });
+            }
