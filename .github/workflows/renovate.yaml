@@ -1,7 +1,5 @@
 name: Renovate
 on:
-  schedule:
-    - cron: '0 10 * * *' # Every day at 10:00 UTC / 07:00 GMT-3'
   workflow_dispatch:
 
 jobs:
